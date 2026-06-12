@@ -1,0 +1,270 @@
+-- ============================================================
+-- GREENWEEZ NPS ANALYSIS
+-- Author: Bahadır Köksal
+-- Tool: Google BigQuery
+-- Period: April – August 2021
+-- Description: NPS analysis for Greenweez e-commerce platform
+--              including data cleaning, deduplication, and
+--              transporter performance breakdown
+-- ============================================================
+
+
+-- ============================================================
+-- STEP 1: DATA EXPLORATION
+-- ============================================================
+
+-- View full table structure
+SELECT *
+FROM course14.gwz_nps;
+
+-- Check if orders_id is a primary key
+SELECT DISTINCT orders_id
+FROM course14.gwz_nps;
+
+-- Order by date and orders_id to spot duplicates
+SELECT *
+FROM course14.gwz_nps
+ORDER BY date_date DESC, orders_id DESC;
+-- Result: order 970720 appears twice → 1 duplicate found
+
+
+-- ============================================================
+-- STEP 2: DATA CLEANING & DEDUPLICATION
+-- ============================================================
+
+-- Create a working copy (staging) — never modify raw data
+CREATE OR REPLACE TABLE course14.gwz_nps_deduplicated AS
+SELECT *
+FROM course14.gwz_nps;
+
+-- Remove duplicates using SELECT DISTINCT
+-- Note: Works here because the duplicate row is 100% identical.
+-- For partial duplicates, ROW_NUMBER() OVER (PARTITION BY orders_id) is safer.
+SELECT DISTINCT *
+FROM course14.gwz_nps
+ORDER BY date_date DESC, orders_id DESC;
+
+-- Create final clean table (analysis-ready)
+CREATE OR REPLACE TABLE course14.gwz_nps_clean AS
+SELECT DISTINCT *
+FROM course14.gwz_nps;
+
+-- Validate: total_rows should equal distinct_orders
+SELECT
+  COUNT(*) AS total_rows,
+  COUNT(DISTINCT orders_id) AS distinct_orders
+FROM course14.gwz_nps_clean;
+-- Result: 6294 = 6294 ✅
+
+-- Table architecture:
+-- gwz_nps              → raw (Bronze)
+-- gwz_nps_deduplicated → staging (working copy)
+-- gwz_nps_clean        → cleaned (Silver)
+-- gwz_nps_calculated   → enriched with NPS column (Gold)
+
+
+-- ============================================================
+-- STEP 3: NPS SCORE CALCULATION
+-- ============================================================
+
+-- Add NPS category column using CASE WHEN
+CREATE OR REPLACE TABLE course14.gwz_nps_calculated AS
+SELECT
+  date_date,
+  orders_id,
+  transporter,
+  sgt,
+  global_note,
+  CASE
+    WHEN global_note BETWEEN 9 AND 10 THEN 1   -- Promoter
+    WHEN global_note BETWEEN 7 AND 8  THEN 0   -- Passive
+    WHEN global_note BETWEEN 0 AND 6  THEN -1  -- Detractor
+    ELSE NULL
+  END AS nps,
+  csat_website,
+  csat_product,
+  csat_price,
+  csat_delivery
+FROM course14.gwz_nps_clean;
+
+-- Count total NPS responses (excluding nulls)
+SELECT COUNT(*) AS total_reviews
+FROM course14.gwz_nps_calculated
+WHERE nps IS NOT NULL;
+-- Result: 6253
+
+-- Count promoters
+SELECT COUNT(*) AS promoters
+FROM course14.gwz_nps_calculated
+WHERE nps = 1;
+-- Result: 4524
+
+-- Count detractors
+SELECT COUNT(*) AS detractors
+FROM course14.gwz_nps_calculated
+WHERE nps = -1;
+-- Result: 459
+
+-- Count passives (validation)
+SELECT COUNT(*)
+FROM course14.gwz_nps_calculated
+WHERE nps = 0;
+-- Result: 1270
+
+-- Calculate overall NPS
+SELECT ROUND((4524 - 459) / 6253 * 100, 1) AS nps_score;
+-- Result: 65.0 ✅
+
+
+-- ============================================================
+-- STEP 4: MONTHLY TREND ANALYSIS
+-- ============================================================
+
+-- June 2021 — Total responses
+SELECT COUNT(*) AS total_reviews
+FROM course14.gwz_nps_calculated
+WHERE nps IS NOT NULL
+AND date_date BETWEEN '2021-06-01' AND '2021-06-30';
+-- Result: 1441
+
+-- June 2021 — Promoters
+SELECT COUNT(*) AS promoters
+FROM course14.gwz_nps_calculated
+WHERE nps = 1
+AND date_date BETWEEN '2021-06-01' AND '2021-06-30';
+-- Result: 1061
+
+-- June 2021 — Detractors
+SELECT COUNT(*) AS detractors
+FROM course14.gwz_nps_calculated
+WHERE nps = -1
+AND date_date BETWEEN '2021-06-01' AND '2021-06-30';
+-- Result: 96
+
+-- June 2021 — NPS Score
+SELECT ROUND((1061 - 96) / 1441 * 100, 1) AS june_nps;
+-- Result: 67.0
+
+-- August 2021 — Total responses
+SELECT COUNT(*) AS total_reviews
+FROM course14.gwz_nps_calculated
+WHERE nps IS NOT NULL
+AND date_date BETWEEN '2021-08-01' AND '2021-08-31';
+-- Result: 1269
+
+-- August 2021 — Promoters
+SELECT COUNT(*) AS promoters
+FROM course14.gwz_nps_calculated
+WHERE nps = 1
+AND date_date BETWEEN '2021-08-01' AND '2021-08-31';
+-- Result: 902
+
+-- August 2021 — Detractors
+SELECT COUNT(*) AS detractors
+FROM course14.gwz_nps_calculated
+WHERE nps = -1
+AND date_date BETWEEN '2021-08-01' AND '2021-08-31';
+-- Result: 104
+
+-- August 2021 — NPS Score
+SELECT ROUND((902 - 104) / 1269 * 100, 1) AS aug_nps;
+-- Result: 62.9
+-- ⚠️ 4-point drop from June. Needs further investigation.
+
+
+-- ============================================================
+-- STEP 5: TRANSPORTER BREAKDOWN
+-- ============================================================
+
+-- List all transporters
+SELECT DISTINCT transporter
+FROM course14.gwz_nps_calculated;
+-- Result: Chrono Pickup, Chrono Home, DPD Pickup, DPD Home
+
+-- Chrono Home — June 2021 — Total
+SELECT COUNT(*) AS total_june_chrono
+FROM course14.gwz_nps_calculated
+WHERE nps IS NOT NULL
+AND transporter = 'Chrono Home'
+AND date_date BETWEEN '2021-06-01' AND '2021-06-30';
+-- Result: 87
+
+-- Chrono Home — June 2021 — Promoters
+SELECT COUNT(*) AS promoters
+FROM course14.gwz_nps_calculated
+WHERE nps = 1
+AND transporter = 'Chrono Home'
+AND date_date BETWEEN '2021-06-01' AND '2021-06-30';
+-- Result: 59
+
+-- Chrono Home — June 2021 — Detractors
+SELECT COUNT(*) AS detractors
+FROM course14.gwz_nps_calculated
+WHERE nps = -1
+AND transporter = 'Chrono Home'
+AND date_date BETWEEN '2021-06-01' AND '2021-06-30';
+-- Result: 5
+
+-- Chrono Home — June 2021 — NPS Score
+SELECT ROUND((59 - 5) / 87 * 100, 1) AS june_chrono_nps;
+-- Result: 62.1
+
+-- Chrono Home — August 2021 — Total
+SELECT COUNT(*) AS total_august_chrono
+FROM course14.gwz_nps_calculated
+WHERE nps IS NOT NULL
+AND transporter = 'Chrono Home'
+AND date_date BETWEEN '2021-08-01' AND '2021-08-31';
+-- Result: 57
+
+-- Chrono Home — August 2021 — Promoters
+SELECT COUNT(*) AS promoters
+FROM course14.gwz_nps_calculated
+WHERE nps = 1
+AND transporter = 'Chrono Home'
+AND date_date BETWEEN '2021-08-01' AND '2021-08-31';
+-- Result: 33
+
+-- Chrono Home — August 2021 — Detractors
+SELECT COUNT(*) AS detractors
+FROM course14.gwz_nps_calculated
+WHERE nps = -1
+AND transporter = 'Chrono Home'
+AND date_date BETWEEN '2021-08-01' AND '2021-08-31';
+-- Result: 13
+
+-- Chrono Home — August 2021 — NPS Score
+SELECT ROUND((33 - 13) / 57 * 100, 1) AS august_chrono_nps;
+-- Result: 35.1
+-- 🚨 27-point drop in one month. Serious delivery problem detected.
+
+
+-- ============================================================
+-- STEP 6: ACTION LIST — MOST CRITICAL CUSTOMERS
+-- ============================================================
+
+-- All Chrono Home orders in August (full investigation)
+SELECT *
+FROM course14.gwz_nps_calculated
+WHERE transporter = 'Chrono Home'
+AND date_date BETWEEN '2021-08-01' AND '2021-08-31';
+
+-- Detractors only
+SELECT *
+FROM course14.gwz_nps_calculated
+WHERE transporter = 'Chrono Home'
+AND date_date BETWEEN '2021-08-01' AND '2021-08-31'
+AND nps = -1;
+-- Result: 13 customers
+
+-- Most critical: detractor + poor delivery score
+-- Sorted by customer segment value (frequent first)
+SELECT *
+FROM course14.gwz_nps_calculated
+WHERE transporter = 'Chrono Home'
+AND date_date BETWEEN '2021-08-01' AND '2021-08-31'
+AND nps = -1
+AND csat_delivery <= 3
+ORDER BY sgt DESC;
+-- Result: 5 customers
+-- 👉 Customer service team should contact these customers first.
