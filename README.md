@@ -14,7 +14,7 @@ Greenweez is a French organic e-commerce company. This project analyzes customer
 
 ## 📁 Dataset
 
-**Source:** Google BigQuery — `course14` dataset  
+
 **Main Table:** `gwz_nps`
 
 | Column | Type | Description |
